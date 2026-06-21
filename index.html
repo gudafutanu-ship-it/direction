@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>建物方向確認</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f172a">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{
+  --bg:#0f172a; --panel:#111827; --card:#1f2937; --text:#f8fafc;
+  --muted:#cbd5e1; --accent:#38bdf8; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;}
+body{min-height:100vh;padding-bottom:calc(14px + env(safe-area-inset-bottom));}
+header{position:sticky;top:0;z-index:20;background:rgba(15,23,42,.92);backdrop-filter:blur(8px);padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.08)}
+h1{font-size:18px;margin:0 0 4px}
+.small{font-size:12px;color:var(--muted);line-height:1.45}
+main{padding:12px;display:grid;gap:12px;max-width:900px;margin:auto}
+.card{background:var(--panel);border:1px solid rgba(255,255,255,.09);border-radius:16px;padding:12px;box-shadow:0 10px 30px rgba(0,0,0,.2)}
+.cameraWrap{position:relative;overflow:hidden;border-radius:14px;background:#000;min-height:250px}
+video{width:100%;height:310px;object-fit:cover;display:block;background:#000}
+.cross{position:absolute;left:50%;top:50%;width:74px;height:74px;transform:translate(-50%,-50%);pointer-events:none}
+.cross:before,.cross:after{content:"";position:absolute;background:rgba(56,189,248,.95);box-shadow:0 0 8px #000}
+.cross:before{left:36px;top:0;width:2px;height:74px}
+.cross:after{left:0;top:36px;width:74px;height:2px}
+.cross .dot{position:absolute;left:32px;top:32px;width:10px;height:10px;border-radius:50%;background:#fff;border:2px solid #38bdf8}
+.statusGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.stat{background:var(--card);border-radius:12px;padding:10px}
+.stat b{display:block;font-size:18px;margin-top:4px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button,select,input{
+  font-size:16px;border:0;border-radius:12px;padding:11px 12px;background:#334155;color:#fff;
+}
+button.primary{background:var(--accent);color:#082f49;font-weight:700}
+button.good{background:var(--ok);color:#052e16;font-weight:700}
+button.warn{background:var(--warn);color:#451a03;font-weight:700}
+button.danger{background:var(--bad);color:#fff;font-weight:700}
+button:disabled{opacity:.45}
+select,input{background:#1f2937;border:1px solid rgba(255,255,255,.12)}
+#mapWrap{position:relative;border-radius:14px;overflow:hidden;background:#0b1120;height:430px;touch-action:none;border:1px solid rgba(255,255,255,.12)}
+#tileLayer{position:absolute;inset:0}
+.tile{position:absolute;width:256px;height:256px;user-select:none;-webkit-user-drag:none}
+#overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.mapHint{position:absolute;left:10px;right:10px;bottom:10px;background:rgba(15,23,42,.82);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:8px;font-size:12px;color:#e2e8f0}
+.badge{display:inline-block;border-radius:999px;padding:5px 10px;font-weight:700;font-size:13px}
+.badge.ok{background:rgba(34,197,94,.18);color:#86efac;border:1px solid rgba(34,197,94,.35)}
+.badge.warn{background:rgba(245,158,11,.18);color:#fcd34d;border:1px solid rgba(245,158,11,.35)}
+.badge.bad{background:rgba(239,68,68,.18);color:#fecaca;border:1px solid rgba(239,68,68,.35)}
+.note{font-size:13px;color:#cbd5e1;line-height:1.55}
+.log{white-space:pre-wrap;background:#020617;border-radius:12px;padding:10px;max-height:160px;overflow:auto;color:#dbeafe;font-size:12px}
+.footerBtns{position:sticky;bottom:0;background:rgba(15,23,42,.94);backdrop-filter:blur(8px);padding:10px;border-top:1px solid rgba(255,255,255,.08);display:flex;gap:8px;z-index:15}
+.footerBtns button{flex:1}
+@media (min-width:760px){
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  video{height:430px}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>建物方向確認</h1>
+  <div class="small">カメラの向きから、地図上に「この範囲の建物の可能性が高い」を表示します。ランドマーク補正でiPhoneの迷子を見える化します。</div>
+</header>
+
+<main>
+  <section class="card">
+    <div class="row">
+      <button class="primary" id="startBtn">開始</button>
+      <button id="calibBtn" disabled>ランドマーク補正開始</button>
+      <button id="resetCalibBtn">補正リセット</button>
+    </div>
+    <p class="note">初回は「開始」を押して、カメラ・位置情報・方位の許可をしてください。iPhoneではHTTPSまたはGitHub Pages上で使ってください。</p>
+  </section>
+
+  <div class="two">
+    <section class="card">
+      <div class="cameraWrap">
+        <video id="video" playsinline autoplay muted></video>
+        <div class="cross"><span class="dot"></span></div>
+      </div>
+      <div class="statusGrid">
+        <div class="stat">信頼度 <b id="trustText">未開始</b></div>
+        <div class="stat">補正値 <b id="corrText">0°</b></div>
+        <div class="stat">GPS誤差 <b id="accText">-- m</b></div>
+        <div class="stat">表示方位 <b id="headingText">--°</b></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row" style="margin-bottom:8px">
+        <label>扇形角度
+          <select id="angleSelect">
+            <option value="5">±5°</option>
+            <option value="10">±10°</option>
+            <option value="15" selected>±15°</option>
+            <option value="20">±20°</option>
+            <option value="30">±30°</option>
+          </select>
+        </label>
+        <label>距離
+          <select id="distSelect">
+            <option value="500">500m</option>
+            <option value="1000">1km</option>
+            <option value="3000" selected>3km</option>
+            <option value="5000">5km</option>
+            <option value="10000">10km</option>
+          </select>
+        </label>
+        <button id="zoomIn">＋</button>
+        <button id="zoomOut">−</button>
+      </div>
+      <div id="mapWrap">
+        <div id="tileLayer"></div>
+        <canvas id="overlay"></canvas>
+        <div class="mapHint" id="mapHint">地図をドラッグできます。補正開始後、カメラ中央に合わせた建物を地図上でタップしてください。</div>
+      </div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div id="trustBadge" class="badge bad">未開始</div>
+    <p class="note" id="reasonText">開始後、GPS精度・方位・補正状態から信頼度を表示します。</p>
+    <div class="log" id="log"></div>
+  </section>
+</main>
+
+<div class="footerBtns">
+  <button id="centerBtn">現在地へ</button>
+  <button id="wideBtn">迷ったら広く</button>
+</div>
+
+<script>
+const video = document.getElementById('video');
+const startBtn = document.getElementById('startBtn');
+const calibBtn = document.getElementById('calibBtn');
+const resetCalibBtn = document.getElementById('resetCalibBtn');
+const logEl = document.getElementById('log');
+const trustText = document.getElementById('trustText');
+const corrText = document.getElementById('corrText');
+const accText = document.getElementById('accText');
+const headingText = document.getElementById('headingText');
+const reasonText = document.getElementById('reasonText');
+const trustBadge = document.getElementById('trustBadge');
+const angleSelect = document.getElementById('angleSelect');
+const distSelect = document.getElementById('distSelect');
+const mapWrap = document.getElementById('mapWrap');
+const tileLayer = document.getElementById('tileLayer');
+const canvas = document.getElementById('overlay');
+const ctx = canvas.getContext('2d');
+const mapHint = document.getElementById('mapHint');
+
+let state = {
+  lat:null, lon:null, accuracy:null,
+  rawHeading:null,
+  correction: Number(localStorage.getItem('directionCorrection') || 0),
+  correctionTime: Number(localStorage.getItem('directionCorrectionTime') || 0),
+  calibrating:false,
+  mapLat:35.681236, mapLon:139.767125, zoom:15,
+  started:false,
+  lastHeadingSamples:[]
+};
+
+function log(s){
+  const t = new Date().toLocaleTimeString();
+  logEl.textContent = `[${t}] ${s}\n` + logEl.textContent;
+}
+
+function normDeg(d){ return ((d % 360) + 360) % 360; }
+function diffDeg(a,b){ let d = normDeg(a-b); if(d>180)d-=360; return d; }
+function toRad(d){return d*Math.PI/180;}
+function toDeg(r){return r*180/Math.PI;}
+
+function bearing(lat1, lon1, lat2, lon2){
+  const p1=toRad(lat1), p2=toRad(lat2), dl=toRad(lon2-lon1);
+  const y=Math.sin(dl)*Math.cos(p2);
+  const x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
+  return normDeg(toDeg(Math.atan2(y,x)));
+}
+
+function destPoint(lat, lon, brng, distM){
+  const R=6371000, d=distM/R, b=toRad(brng), p1=toRad(lat), l1=toRad(lon);
+  const p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(b));
+  const l2=l1+Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(p1), Math.cos(d)-Math.sin(p1)*Math.sin(p2));
+  return {lat:toDeg(p2), lon:toDeg(l2)};
+}
+
+function lon2x(lon,z){ return (lon+180)/360*Math.pow(2,z)*256; }
+function lat2y(lat,z){
+  const s=Math.sin(toRad(lat));
+  return (0.5 - Math.log((1+s)/(1-s))/(4*Math.PI))*Math.pow(2,z)*256;
+}
+function x2lon(x,z){ return x/(Math.pow(2,z)*256)*360-180; }
+function y2lat(y,z){
+  const n=Math.PI-2*Math.PI*y/(Math.pow(2,z)*256);
+  return toDeg(Math.atan(Math.sinh(n)));
+}
+
+function mapCenterWorld(){
+  return {x:lon2x(state.mapLon,state.zoom), y:lat2y(state.mapLat,state.zoom)};
+}
+function latLonToScreen(lat,lon){
+  const c=mapCenterWorld();
+  return {x: lon2x(lon,state.zoom)-c.x+mapWrap.clientWidth/2, y: lat2y(lat,state.zoom)-c.y+mapWrap.clientHeight/2};
+}
+function screenToLatLon(x,y){
+  const c=mapCenterWorld();
+  const wx=c.x + x - mapWrap.clientWidth/2;
+  const wy=c.y + y - mapWrap.clientHeight/2;
+  return {lat:x2lat(wx,state.zoom), lon:x2lon(wy,state.zoom)};
+}
+
+function renderTiles(){
+  tileLayer.innerHTML='';
+  const w=mapWrap.clientWidth, h=mapWrap.clientHeight, z=state.zoom;
+  const c=mapCenterWorld();
+  const startX=Math.floor((c.x-w/2)/256)-1, endX=Math.floor((c.x+w/2)/256)+1;
+  const startY=Math.floor((c.y-h/2)/256)-1, endY=Math.floor((c.y+h/2)/256)+1;
+  const max=Math.pow(2,z);
+  for(let tx=startX; tx<=endX; tx++){
+    for(let ty=startY; ty<=endY; ty++){
+      if(ty<0 || ty>=max) continue;
+      const xt=((tx%max)+max)%max;
+      const img=document.createElement('img');
+      img.className='tile';
+      img.src=`https://tile.openstreetmap.org/${z}/${xt}/${ty}.png`;
+      img.style.left=(tx*256 - c.x + w/2)+'px';
+      img.style.top=(ty*256 - c.y + h/2)+'px';
+      img.alt='';
+      tileLayer.appendChild(img);
+    }
+  }
+}
+
+function draw(){
+  const dpr=window.devicePixelRatio||1;
+  canvas.width=mapWrap.clientWidth*dpr;
+  canvas.height=mapWrap.clientHeight*dpr;
+  canvas.style.width=mapWrap.clientWidth+'px';
+  canvas.style.height=mapWrap.clientHeight+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,mapWrap.clientWidth,mapWrap.clientHeight);
+
+  renderTiles();
+
+  if(state.lat==null){
+    return;
+  }
+
+  const me=latLonToScreen(state.lat,state.lon);
+
+  // accuracy circle
+  if(state.accuracy){
+    const east=destPoint(state.lat,state.lon,90,state.accuracy);
+    const e=latLonToScreen(east.lat,east.lon);
+    const r=Math.abs(e.x-me.x);
+    ctx.beginPath(); ctx.arc(me.x,me.y,r,0,Math.PI*2);
+    ctx.fillStyle='rgba(56,189,248,0.10)'; ctx.fill();
+    ctx.strokeStyle='rgba(56,189,248,0.45)'; ctx.lineWidth=1; ctx.stroke();
+  }
+
+  // cone
+  const head=getDisplayHeading();
+  if(head!=null){
+    const half=Number(angleSelect.value);
+    const dist=Number(distSelect.value);
+    const points=[me];
+    for(let a=head-half; a<=head+half; a+=2){
+      const p=destPoint(state.lat,state.lon,normDeg(a),dist);
+      points.push(latLonToScreen(p.lat,p.lon));
+    }
+    ctx.beginPath();
+    ctx.moveTo(points[0].x,points[0].y);
+    for(let i=1;i<points.length;i++) ctx.lineTo(points[i].x,points[i].y);
+    ctx.closePath();
+    ctx.fillStyle='rgba(245,158,11,0.24)'; ctx.fill();
+    ctx.strokeStyle='rgba(245,158,11,0.95)'; ctx.lineWidth=2; ctx.stroke();
+
+    const tip=destPoint(state.lat,state.lon,head,Math.min(dist,1200));
+    const tp=latLonToScreen(tip.lat,tip.lon);
+    ctx.beginPath(); ctx.moveTo(me.x,me.y); ctx.lineTo(tp.x,tp.y);
+    ctx.strokeStyle='rgba(255,255,255,0.95)'; ctx.lineWidth=2; ctx.stroke();
+  }
+
+  // current marker
+  ctx.beginPath(); ctx.arc(me.x,me.y,8,0,Math.PI*2);
+  ctx.fillStyle='#38bdf8'; ctx.fill();
+  ctx.strokeStyle='#ffffff'; ctx.lineWidth=3; ctx.stroke();
+
+  if(state.calibrating){
+    ctx.fillStyle='rgba(15,23,42,.82)';
+    ctx.fillRect(8,8,mapWrap.clientWidth-16,44);
+    ctx.fillStyle='#fff';
+    ctx.font='14px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.fillText('補正中：カメラ中央の建物を地図上でタップ',16,35);
+  }
+}
+
+function getDisplayHeading(){
+  if(state.rawHeading==null) return null;
+  return normDeg(state.rawHeading + state.correction);
+}
+
+function updateTrust(){
+  let reasons=[], score=0;
+  if(!state.started){ setTrust('未開始','bad','開始してください'); return; }
+  if(state.lat==null){ reasons.push('位置情報なし'); }
+  else {
+    if(state.accuracy<=15) score+=2;
+    else if(state.accuracy<=35) score+=1;
+    else reasons.push('GPS誤差が大きい');
+  }
+  if(state.rawHeading==null){ reasons.push('方位なし'); }
+  else score+=1;
+
+  const ageMin = state.correctionTime ? (Date.now()-state.correctionTime)/60000 : Infinity;
+  if(state.correctionTime && ageMin<=10) score+=2;
+  else if(state.correctionTime && ageMin<=30) score+=1;
+  else reasons.push('補正なし／補正が古い');
+
+  if(Math.abs(state.correction)>30) reasons.push('補正値が大きい');
+  if(state.lastHeadingSamples.length>=8){
+    const maxSwing = Math.max(...state.lastHeadingSamples)-Math.min(...state.lastHeadingSamples);
+    if(maxSwing>35) reasons.push('方位が不安定');
+  }
+
+  if(score>=5 && reasons.length===0) setTrust('高','ok','条件は良好です。地図上の扇形を比較的狭く見てもよさそうです。');
+  else if(score>=3) setTrust('中','warn', reasons.join('／') || '少し注意して使ってください。');
+  else setTrust('低','bad', reasons.join('／') || '再補正してください。');
+}
+
+function setTrust(text, cls, reason){
+  trustText.textContent=text;
+  trustBadge.className='badge '+cls;
+  trustBadge.textContent='信頼度：'+text;
+  reasonText.textContent=reason;
+}
+
+function refreshUI(){
+  corrText.textContent=(state.correction>=0?'+':'')+state.correction.toFixed(1)+'°';
+  accText.textContent=state.accuracy?('±'+Math.round(state.accuracy)+'m'):'-- m';
+  const h=getDisplayHeading();
+  headingText.textContent=h==null?'--°':Math.round(h)+'°';
+  calibBtn.disabled=!(state.started && state.lat!=null && state.rawHeading!=null);
+  updateTrust();
+  draw();
+}
+
+async function start(){
+  state.started=true;
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}, audio:false});
+    video.srcObject=stream;
+    log('カメラ開始');
+  }catch(e){
+    log('カメラを開始できません: '+e.message);
+  }
+
+  if(navigator.geolocation){
+    navigator.geolocation.watchPosition(pos=>{
+      state.lat=pos.coords.latitude;
+      state.lon=pos.coords.longitude;
+      state.accuracy=pos.coords.accuracy;
+      if(!state.mapMovedByUser){
+        state.mapLat=state.lat; state.mapLon=state.lon;
+      }
+      refreshUI();
+    }, err=>{
+      log('位置情報エラー: '+err.message);
+      refreshUI();
+    }, {enableHighAccuracy:true, maximumAge:1000, timeout:10000});
+  }
+
+  try{
+    if(typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
+      const res = await DeviceOrientationEvent.requestPermission();
+      log('方位センサー許可: '+res);
+    }
+  }catch(e){ log('方位許可エラー: '+e.message); }
+
+  window.addEventListener('deviceorientation', onOrientation, true);
+  window.addEventListener('deviceorientationabsolute', onOrientation, true);
+  refreshUI();
+}
+
+function onOrientation(e){
+  let heading=null;
+  if(typeof e.webkitCompassHeading === 'number'){
+    heading=e.webkitCompassHeading;
+  }else if(e.absolute && typeof e.alpha === 'number'){
+    heading=360-e.alpha;
+  }else if(typeof e.alpha === 'number'){
+    heading=360-e.alpha;
+  }
+  if(heading!=null && !Number.isNaN(heading)){
+    state.rawHeading=normDeg(heading);
+    state.lastHeadingSamples.push(state.rawHeading);
+    if(state.lastHeadingSamples.length>12) state.lastHeadingSamples.shift();
+    refreshUI();
+  }
+}
+
+startBtn.addEventListener('click', start);
+
+calibBtn.addEventListener('click', ()=>{
+  state.calibrating=true;
+  mapHint.textContent='補正中：カメラ中央に合わせた建物を、地図上でタップしてください。';
+  log('ランドマーク補正開始');
+  draw();
+});
+
+resetCalibBtn.addEventListener('click', ()=>{
+  state.correction=0; state.correctionTime=0;
+  localStorage.removeItem('directionCorrection');
+  localStorage.removeItem('directionCorrectionTime');
+  log('補正をリセットしました');
+  refreshUI();
+});
+
+mapWrap.addEventListener('click', (ev)=>{
+  if(!state.calibrating || state.lat==null || state.rawHeading==null) return;
+  const rect=mapWrap.getBoundingClientRect();
+  const x=ev.clientX-rect.left, y=ev.clientY-rect.top;
+  const p=screenToLatLon(x,y);
+  const trueBearing=bearing(state.lat,state.lon,p.lat,p.lon);
+  const corr=diffDeg(trueBearing, state.rawHeading);
+  state.correction=corr;
+  state.correctionTime=Date.now();
+  localStorage.setItem('directionCorrection', String(state.correction));
+  localStorage.setItem('directionCorrectionTime', String(state.correctionTime));
+  state.calibrating=false;
+  mapHint.textContent='補正完了。扇形は補正後の方位で表示しています。';
+  log(`補正完了：実方位 ${trueBearing.toFixed(1)}° / センサー ${state.rawHeading.toFixed(1)}° / 補正 ${(corr>=0?'+':'')+corr.toFixed(1)}°`);
+  refreshUI();
+});
+
+// basic map drag
+let dragging=false, last=null;
+mapWrap.addEventListener('pointerdown', e=>{ dragging=true; last={x:e.clientX,y:e.clientY}; mapWrap.setPointerCapture(e.pointerId); });
+mapWrap.addEventListener('pointermove', e=>{
+  if(!dragging || !last) return;
+  const dx=e.clientX-last.x, dy=e.clientY-last.y; last={x:e.clientX,y:e.clientY};
+  const c=mapCenterWorld();
+  state.mapLon=x2lon(c.x-dx,state.zoom);
+  state.mapLat=x2lat(c.y-dy,state.zoom);
+  state.mapMovedByUser=true;
+  draw();
+});
+mapWrap.addEventListener('pointerup', ()=>{ dragging=false; last=null; });
+
+document.getElementById('zoomIn').addEventListener('click',()=>{state.zoom=Math.min(19,state.zoom+1); draw();});
+document.getElementById('zoomOut').addEventListener('click',()=>{state.zoom=Math.max(3,state.zoom-1); draw();});
+document.getElementById('centerBtn').addEventListener('click',()=>{ if(state.lat!=null){state.mapLat=state.lat; state.mapLon=state.lon; state.mapMovedByUser=false; draw();}});
+document.getElementById('wideBtn').addEventListener('click',()=>{ angleSelect.value='30'; distSelect.value='5000'; refreshUI();});
+angleSelect.addEventListener('change', refreshUI);
+distSelect.addEventListener('change', refreshUI);
+window.addEventListener('resize', draw);
+
+// service worker registration
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('sw.js').catch(()=>{});
+  });
+}
+
+refreshUI();
+</script>
+</body>
+</html>
